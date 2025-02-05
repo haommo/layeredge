@@ -356,18 +356,19 @@ class LayerEdgeConnection {
             "get",
             `https://referralapi.layeredge.io/api/referral/wallet-details/${this.wallet.address}`
         );
-
+    
         if (response && response.data) {
-            logger.info(`${this.wallet.address} Total Points:`, response.data.data?.nodePoints || 0);
-            return true;
+            const nodePoints = response.data.data?.nodePoints || 0;
+            logger.info(`${this.wallet.address} Total Points:`, nodePoints);
+            return nodePoints; // ✅ Trả về điểm thực tế
         } else {
-            logger.error("Failed to check Total Points..");
-            return false;
+            logger.error("Failed to check Total Points.");
+            return null; // ✅ Trả về null nếu có lỗi
         }
     }
 }
 
-async function processWallet(wallet, index, total) {
+async function processWallet(wallet, index, total, stats) {
     try {
         logger.verbose(`Processing wallet ${index + 1}/${total}`, wallet.address);
         const socket = new LayerEdgeConnection(wallet.proxy, wallet.privateKey, wallet.refCode);
@@ -409,19 +410,23 @@ async function processWallet(wallet, index, total) {
         wallet.point = await socket.checkNodePoints();
 
         logger.progress(wallet.address, 'Wallet Processing Complete', 'success');
+        stats.success++;
     } catch (error) {
         logger.error(`Failed processing wallet ${wallet.address}`, '', error);
         logger.progress(wallet.address, 'Wallet Processing Failed', 'failed');
+        stats.failed++;
     }
 }
 
 async function processWalletsInBatches(wallets, batchSize) {
     const total = wallets.length;
+    let stats = { success: 0, failed: 0 }; 
     for (let i = 0; i < total; i += batchSize) {
         const batch = wallets.slice(i, i + batchSize); 
         logger.info(`Processing batch ${i / batchSize + 1}/${Math.ceil(total / batchSize)}`, `Wallets: ${batch.length}`);
-        await Promise.allSettled(batch.map((wallet, index) => processWallet(wallet, i + index, total)));
+        await Promise.allSettled(batch.map((wallet, index) => processWallet(wallet, i + index, total, stats)));
     }
+    return stats; 
 }
 
 async function run() {
@@ -431,12 +436,12 @@ async function run() {
         if (wallets.length === 0) {
             throw new Error('No wallets configured in Excel');
         }
-
         logger.info('Configuration loaded', `Wallets: ${wallets.length}`);
-        await processWalletsInBatches(wallets, MAX_CONCURRENT_WALLETS);
+        const stats = await processWalletsInBatches(wallets, MAX_CONCURRENT_WALLETS);
         await updatePointsToExcel(wallets);
-        logger.warn('Complete', 'Waiting 1 hour before next run...');
-        await delay(60 * 60);
+        logger.success(`Summary: ${stats.success} wallets processed successfully, ${stats.failed} wallets failed.`);
+        logger.warn('Complete', 'Waiting 2 hour before next run...');
+        await delay(120 * 60);
     } catch (error) {
         logger.error('Fatal error occurred', '', error);
         process.exit(1);
